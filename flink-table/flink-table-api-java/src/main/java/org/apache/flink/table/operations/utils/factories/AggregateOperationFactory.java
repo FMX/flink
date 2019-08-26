@@ -89,14 +89,14 @@ import static org.apache.flink.table.types.logical.utils.LogicalTypeChecks.isTim
 @Internal
 public final class AggregateOperationFactory {
 
-	private final boolean isStreaming;
+	private final boolean isStreamingMode;
 	private final NoNestedAggregates noNestedAggregates = new NoNestedAggregates();
 	private final ValidateDistinct validateDistinct = new ValidateDistinct();
 	private final AggregationExpressionValidator aggregationsValidator = new AggregationExpressionValidator();
 	private final IsKeyTypeChecker isKeyTypeChecker = new IsKeyTypeChecker();
 
-	public AggregateOperationFactory(boolean isStreaming) {
-		this.isStreaming = isStreaming;
+	public AggregateOperationFactory(boolean isStreamingMode) {
+		this.isStreamingMode = isStreamingMode;
 	}
 
 	/**
@@ -274,7 +274,7 @@ public final class AggregateOperationFactory {
 	}
 
 	private void validateTimeAttributeType(LogicalType timeFieldType) {
-		if (isStreaming) {
+		if (isStreamingMode) {
 			validateStreamTimeAttribute(timeFieldType);
 		} else {
 			validateBatchTimeAttribute(timeFieldType);
@@ -518,11 +518,11 @@ public final class AggregateOperationFactory {
 	 * Extract a table aggregate Expression and it's aliases.
 	 */
 	public Tuple2<ResolvedExpression, List<String>> extractTableAggFunctionAndAliases(Expression callExpr) {
-		TableAggFunctionCallVisitor visitor = new TableAggFunctionCallVisitor();
+		TableAggFunctionCallResolver visitor = new TableAggFunctionCallResolver();
 		return Tuple2.of(callExpr.accept(visitor), visitor.getAlias());
 	}
 
-	private class TableAggFunctionCallVisitor extends ResolvedExpressionDefaultVisitor<ResolvedExpression> {
+	private class TableAggFunctionCallResolver extends ResolvedExpressionDefaultVisitor<ResolvedExpression> {
 
 		private List<String> alias = new LinkedList<>();
 

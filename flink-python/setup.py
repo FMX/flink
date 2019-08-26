@@ -140,7 +140,7 @@ run sdist.
     scripts.append("pyflink/find_flink_home.py")
 
     setup(
-        name='pyflink',
+        name='apache-flink',
         version=VERSION,
         packages=['pyflink',
                   'pyflink.table',
@@ -170,7 +170,7 @@ run sdist.
         package_data={
             'pyflink': ['LICENSE', 'NOTICE', 'README.txt'],
             'pyflink.lib': ['*.jar'],
-            'pyflink.opt': ['*', '*/*'],
+            'pyflink.opt': ['*.*', '*/*'],
             'pyflink.conf': ['*'],
             'pyflink.log': ['*'],
             'pyflink.examples': ['*.py', '*/*.py'],
@@ -179,8 +179,8 @@ run sdist.
             'pyflink.bin': ['*']
         },
         scripts=scripts,
-        url='http://flink.apache.org',
-        license='http://www.apache.org/licenses/LICENSE-2.0',
+        url='https://flink.apache.org',
+        license='https://www.apache.org/licenses/LICENSE-2.0',
         author='Flink Developers',
         author_email='dev@flink.apache.org',
         install_requires=['py4j==0.10.8.1', 'python-dateutil'],
@@ -192,8 +192,6 @@ run sdist.
             'Development Status :: 1 - Planning',
             'License :: OSI Approved :: Apache Software License',
             'Programming Language :: Python :: 2.7',
-            'Programming Language :: Python :: 3.3',
-            'Programming Language :: Python :: 3.4',
             'Programming Language :: Python :: 3.5',
             'Programming Language :: Python :: 3.6',
             'Programming Language :: Python :: 3.7']

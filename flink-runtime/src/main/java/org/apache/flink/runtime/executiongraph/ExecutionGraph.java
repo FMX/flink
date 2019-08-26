@@ -48,6 +48,7 @@ import org.apache.flink.runtime.execution.SuppressRestartsException;
 import org.apache.flink.runtime.executiongraph.failover.FailoverStrategy;
 import org.apache.flink.runtime.executiongraph.failover.RestartAllStrategy;
 import org.apache.flink.runtime.executiongraph.failover.adapter.DefaultFailoverTopology;
+import org.apache.flink.runtime.executiongraph.failover.flip1.ResultPartitionAvailabilityChecker;
 import org.apache.flink.runtime.executiongraph.failover.flip1.partitionrelease.NotReleasingPartitionReleaseStrategy;
 import org.apache.flink.runtime.executiongraph.failover.flip1.partitionrelease.PartitionReleaseStrategy;
 import org.apache.flink.runtime.executiongraph.restart.ExecutionGraphRestartCallback;
@@ -79,7 +80,6 @@ import org.apache.flink.runtime.taskmanager.TaskExecutionState;
 import org.apache.flink.types.Either;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkException;
-import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.OptionalFailure;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.SerializedThrowable;
@@ -237,8 +237,8 @@ public class ExecutionGraph implements AccessExecutionGraph {
 	/** Strategy to use for restarts. */
 	private final RestartStrategy restartStrategy;
 
-	/** The slot provider to use for allocating slots for tasks as they are needed. */
-	private final SlotProvider slotProvider;
+	/** The slot provider strategy to use for allocating slots for tasks as they are needed. */
+	private final SlotProviderStrategy slotProviderStrategy;
 
 	/** The classloader for the user code. Needed for calls into user code classes. */
 	private final ClassLoader userClassLoader;
@@ -262,12 +262,12 @@ public class ExecutionGraph implements AccessExecutionGraph {
 
 	/** Flag to indicate whether the scheduler may queue tasks for execution, or needs to be able
 	 * to deploy them immediately. */
-	private boolean allowQueuedScheduling = false;
+	private final boolean allowQueuedScheduling;
 
 	/** The mode of scheduling. Decides how to select the initial set of tasks to be deployed.
 	 * May indicate to deploy all sources, or to deploy everything, or to deploy via backtracking
 	 * from results than need to be materialized. */
-	private ScheduleMode scheduleMode = ScheduleMode.LAZY_FROM_SOURCES;
+	private final ScheduleMode scheduleMode;
 
 	/** The maximum number of prior execution attempts kept in history. */
 	private final int maxPriorAttemptsHistoryLength;
@@ -297,6 +297,8 @@ public class ExecutionGraph implements AccessExecutionGraph {
 
 	private final PartitionTracker partitionTracker;
 
+	private final ResultPartitionAvailabilityChecker resultPartitionAvailabilityChecker;
+
 	/**
 	 * Future for an ongoing or completed scheduling action.
 	 */
@@ -317,8 +319,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
 
 	/** Shuffle master to register partitions for task deployment. */
 	private final ShuffleMaster<?> shuffleMaster;
-
-	private boolean forcePartitionReleaseOnConsumption;
 
 	// --------------------------------------------------------------------------------------------
 	//   Constructors
@@ -423,11 +423,12 @@ public class ExecutionGraph implements AccessExecutionGraph {
 			allocationTimeout,
 			new NotReleasingPartitionReleaseStrategy.Factory(),
 			NettyShuffleMaster.INSTANCE,
-			true,
 			new PartitionTrackerImpl(
 				jobInformation.getJobId(),
 				NettyShuffleMaster.INSTANCE,
-				ignored -> Optional.empty()));
+				ignored -> Optional.empty()),
+			ScheduleMode.LAZY_FROM_SOURCES,
+			false);
 	}
 
 	public ExecutionGraph(
@@ -444,8 +445,9 @@ public class ExecutionGraph implements AccessExecutionGraph {
 			Time allocationTimeout,
 			PartitionReleaseStrategy.Factory partitionReleaseStrategyFactory,
 			ShuffleMaster<?> shuffleMaster,
-			boolean forcePartitionReleaseOnConsumption,
-			PartitionTracker partitionTracker) throws IOException {
+			PartitionTracker partitionTracker,
+			ScheduleMode scheduleMode,
+			boolean allowQueuedScheduling) throws IOException {
 
 		checkNotNull(futureExecutor);
 
@@ -453,12 +455,20 @@ public class ExecutionGraph implements AccessExecutionGraph {
 
 		this.blobWriter = Preconditions.checkNotNull(blobWriter);
 
+		this.scheduleMode = checkNotNull(scheduleMode);
+
+		this.allowQueuedScheduling = allowQueuedScheduling;
+
 		this.jobInformationOrBlobKey = BlobWriter.serializeAndTryOffload(jobInformation, jobInformation.getJobId(), blobWriter);
 
 		this.futureExecutor = Preconditions.checkNotNull(futureExecutor);
 		this.ioExecutor = Preconditions.checkNotNull(ioExecutor);
 
-		this.slotProvider = Preconditions.checkNotNull(slotProvider, "scheduler");
+		this.slotProviderStrategy = SlotProviderStrategy.from(
+			scheduleMode,
+			slotProvider,
+			allocationTimeout,
+			allowQueuedScheduling);
 		this.userClassLoader = Preconditions.checkNotNull(userClassLoader, "userClassLoader");
 
 		this.tasks = new ConcurrentHashMap<>(16);
@@ -497,9 +507,11 @@ public class ExecutionGraph implements AccessExecutionGraph {
 
 		this.shuffleMaster = checkNotNull(shuffleMaster);
 
-		this.forcePartitionReleaseOnConsumption = forcePartitionReleaseOnConsumption;
-
 		this.partitionTracker = checkNotNull(partitionTracker);
+
+		this.resultPartitionAvailabilityChecker = new ExecutionGraphResultPartitionAvailabilityChecker(
+			this::createResultPartitionId,
+			partitionTracker);
 
 		LOG.info("Job recovers via failover strategy: {}", failoverStrategy.getStrategyName());
 	}
@@ -522,14 +534,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
 
 	public boolean isQueuedSchedulingAllowed() {
 		return this.allowQueuedScheduling;
-	}
-
-	public void setQueuedSchedulingAllowed(boolean allowed) {
-		this.allowQueuedScheduling = allowed;
-	}
-
-	public void setScheduleMode(ScheduleMode scheduleMode) {
-		this.scheduleMode = scheduleMode;
 	}
 
 	public ScheduleMode getScheduleMode() {
@@ -570,10 +574,20 @@ public class ExecutionGraph implements AccessExecutionGraph {
 
 		checkpointStatsTracker = checkNotNull(statsTracker, "CheckpointStatsTracker");
 
-		CheckpointFailureManager failureManager = new CheckpointFailureManager(chkConfig.getTolerableCheckpointFailureNumber(), () ->
-			getJobMasterMainThreadExecutor().execute(() ->
-				failGlobal(new FlinkRuntimeException("Exceeded checkpoint tolerable failure threshold."))
-			));
+		CheckpointFailureManager failureManager = new CheckpointFailureManager(
+			chkConfig.getTolerableCheckpointFailureNumber(),
+			new CheckpointFailureManager.FailJobCallback() {
+				@Override
+				public void failJob(Throwable cause) {
+					getJobMasterMainThreadExecutor().execute(() -> failGlobal(cause));
+				}
+
+				@Override
+				public void failJobDueToTaskFailure(Throwable cause, ExecutionAttemptID failingTask) {
+					getJobMasterMainThreadExecutor().execute(() -> failGlobalIfExecutionIsStillRunning(cause, failingTask));
+				}
+			}
+		);
 
 		// create the coordinator that triggers and commits checkpoints and holds the state
 		checkpointCoordinator = new CheckpointCoordinator(
@@ -671,8 +685,8 @@ public class ExecutionGraph implements AccessExecutionGraph {
 		return jsonPlan;
 	}
 
-	public SlotProvider getSlotProvider() {
-		return slotProvider;
+	public SlotProviderStrategy getSlotProviderStrategy() {
+		return slotProviderStrategy;
 	}
 
 	public Either<SerializedValue<JobInformation>, PermanentBlobKey> getJobInformationOrBlobKey() {
@@ -725,10 +739,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
 	public long getNumberOfFullRestarts() {
 		// subtract one, because the version starts at one
 		return globalModVersion - 1;
-	}
-
-	boolean isForcePartitionReleaseOnConsumption() {
-		return forcePartitionReleaseOnConsumption;
 	}
 
 	@Override
@@ -940,21 +950,10 @@ public class ExecutionGraph implements AccessExecutionGraph {
 
 		if (transitionState(JobStatus.CREATED, JobStatus.RUNNING)) {
 
-			final CompletableFuture<Void> newSchedulingFuture;
-
-			switch (scheduleMode) {
-
-				case LAZY_FROM_SOURCES:
-					newSchedulingFuture = scheduleLazy();
-					break;
-
-				case EAGER:
-					newSchedulingFuture = scheduleEager();
-					break;
-
-				default:
-					throw new JobException("Schedule mode is invalid.");
-			}
+			final CompletableFuture<Void> newSchedulingFuture = SchedulingUtils.schedule(
+				scheduleMode,
+				getAllExecutionVertices(),
+				this);
 
 			if (state == JobStatus.RUNNING && currentGlobalModVersion == globalModVersion) {
 				schedulingFuture = newSchedulingFuture;
@@ -976,18 +975,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
 		else {
 			throw new IllegalStateException("Job may only be scheduled from state " + JobStatus.CREATED);
 		}
-	}
-
-	private CompletableFuture<Void> scheduleLazy() {
-		return SchedulingUtils.scheduleLazy(getAllExecutionVertices(), this);
-	}
-
-	/**
-	 * @return Future which is completed once the {@link ExecutionGraph} has been scheduled.
-	 * The future can also be completed exceptionally if an error happened.
-	 */
-	private CompletableFuture<Void> scheduleEager() {
-		return SchedulingUtils.scheduleEager(getAllExecutionVertices(), this);
 	}
 
 	public void cancel() {
@@ -1120,6 +1107,16 @@ public class ExecutionGraph implements AccessExecutionGraph {
 		}
 	}
 
+	void failGlobalIfExecutionIsStillRunning(Throwable cause, ExecutionAttemptID failingAttempt) {
+		final Execution failedExecution = currentExecutions.get(failingAttempt);
+		if (failedExecution != null && failedExecution.getState() == ExecutionState.RUNNING) {
+			failGlobal(cause);
+		} else {
+			LOG.debug("The failing attempt {} belongs to an already not" +
+				" running task thus won't fail the job", failingAttempt);
+		}
+	}
+
 	/**
 	 * Fails the execution graph globally. This failure will not be recovered by a specific
 	 * failover strategy, but results in a full restart of all tasks.
@@ -1238,6 +1235,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
 
 			scheduleForExecution();
 		}
+		// TODO remove the catch block if we align the schematics to not fail global within the restarter.
 		catch (Throwable t) {
 			LOG.warn("Failed to restart the job.", t);
 			failGlobal(t);
@@ -1456,8 +1454,13 @@ public class ExecutionGraph implements AccessExecutionGraph {
 					LOG.info("Restarting the job {} ({}).", getJobName(), getJobID());
 
 					RestartCallback restarter = new ExecutionGraphRestartCallback(this, globalModVersionForRestart);
-					restartStrategy.restart(restarter, getJobMasterMainThreadExecutor());
-
+					FutureUtils.assertNoException(
+						restartStrategy
+							.restart(restarter, getJobMasterMainThreadExecutor())
+							.exceptionally((throwable) -> {
+								failGlobal(throwable);
+								return null;
+							}));
 					return true;
 				}
 				else if (!isRestartable && transitionState(currentState, JobStatus.FAILED, failureCause)) {
@@ -1548,7 +1551,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
 			case CANCELED:
 				// this deserialization is exception-free
 				accumulators = deserializeAccumulators(state);
-				attempt.completeCancelling(accumulators, state.getIOMetrics());
+				attempt.completeCancelling(accumulators, state.getIOMetrics(), false);
 				return true;
 
 			case FAILED:
@@ -1586,7 +1589,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
 		}
 	}
 
-	private ResultPartitionID createResultPartitionId(final IntermediateResultPartitionID resultPartitionId) {
+	ResultPartitionID createResultPartitionId(final IntermediateResultPartitionID resultPartitionId) {
 		final SchedulingResultPartition schedulingResultPartition = schedulingTopology.getResultPartitionOrThrow(resultPartitionId);
 		final SchedulingExecutionVertex producer = schedulingResultPartition.getProducer();
 		final ExecutionVertexID producerId = producer.getId();
@@ -1760,6 +1763,10 @@ public class ExecutionGraph implements AccessExecutionGraph {
 
 	public PartitionTracker getPartitionTracker() {
 		return partitionTracker;
+	}
+
+	public ResultPartitionAvailabilityChecker getResultPartitionAvailabilityChecker() {
+		return resultPartitionAvailabilityChecker;
 	}
 
 	PartitionReleaseStrategy getPartitionReleaseStrategy() {

@@ -97,6 +97,12 @@ public class StreamGraph extends StreamingPlan {
 
 	private TimeCharacteristic timeCharacteristic;
 
+	/**
+	 * If there are some stream edges that can not be chained and the shuffle mode of edge is not
+	 * specified, translate these edges into {@code BLOCKING} result partition type.
+	 */
+	private boolean blockingConnectionsBetweenChains;
+
 	private Map<Integer, StreamNode> streamNodes;
 	private Set<Integer> sources;
 	private Set<Integer> sinks;
@@ -184,6 +190,22 @@ public class StreamGraph extends StreamingPlan {
 		this.timeCharacteristic = timeCharacteristic;
 	}
 
+	/**
+	 * If there are some stream edges that can not be chained and the shuffle mode of edge is not
+	 * specified, translate these edges into {@code BLOCKING} result partition type.
+	 */
+	public boolean isBlockingConnectionsBetweenChains() {
+		return blockingConnectionsBetweenChains;
+	}
+
+	/**
+	 * If there are some stream edges that can not be chained and the shuffle mode of edge is not
+	 * specified, translate these edges into {@code BLOCKING} result partition type.
+	 */
+	public void setBlockingConnectionsBetweenChains(boolean blockingConnectionsBetweenChains) {
+		this.blockingConnectionsBetweenChains = blockingConnectionsBetweenChains;
+	}
+
 	// Checkpointing
 
 	public boolean isChainingEnabled() {
@@ -261,8 +283,9 @@ public class StreamGraph extends StreamingPlan {
 			TypeInformation<OUT> outTypeInfo,
 			String operatorName) {
 
-		Class<? extends AbstractInvokable> vertexClass = taskOperatorFactory.isOperatorSelectiveReading() ?
-			TwoInputSelectableStreamTask.class : TwoInputStreamTask.class;
+		Class<? extends AbstractInvokable> vertexClass =
+			taskOperatorFactory.isOperatorSelectiveReading(Thread.currentThread().getContextClassLoader()) ?
+				TwoInputSelectableStreamTask.class : TwoInputStreamTask.class;
 
 		addNode(vertexID, slotSharingGroup, coLocationGroup, vertexClass, taskOperatorFactory, operatorName);
 
@@ -470,7 +493,7 @@ public class StreamGraph extends StreamingPlan {
 			}
 
 			if (shuffleMode == null) {
-				shuffleMode = ShuffleMode.PIPELINED;
+				shuffleMode = ShuffleMode.UNDEFINED;
 			}
 
 			StreamEdge edge = new StreamEdge(upstreamNode, downstreamNode, typeNumber, outputNames, partitioner, outputTag, shuffleMode);
@@ -701,17 +724,8 @@ public class StreamGraph extends StreamingPlan {
 	/**
 	 * Gets the assembled {@link JobGraph} with a given job id.
 	 */
-	@SuppressWarnings("deprecation")
 	@Override
 	public JobGraph getJobGraph(@Nullable JobID jobID) {
-		// temporarily forbid checkpointing for iterative jobs
-		if (isIterative() && checkpointConfig.isCheckpointingEnabled() && !checkpointConfig.isForceCheckpointing()) {
-			throw new UnsupportedOperationException(
-				"Checkpointing is currently not supported by default for iterative jobs, as we cannot guarantee exactly once semantics. "
-					+ "State checkpoints happen normally, but records in-transit during the snapshot will be lost upon failure. "
-					+ "\nThe user can force enable state checkpoints with the reduced guarantees by calling: env.enableCheckpointing(interval,true)");
-		}
-
 		return StreamingJobGraphGenerator.createJobGraph(this, jobID);
 	}
 

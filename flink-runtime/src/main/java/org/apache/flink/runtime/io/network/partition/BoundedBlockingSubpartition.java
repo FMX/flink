@@ -198,15 +198,16 @@ final class BoundedBlockingSubpartition extends ResultSubpartition {
 
 			availability.notifyDataAvailable();
 
-			final BoundedData.Reader dataReader = data.createReader();
 			final BoundedBlockingSubpartitionReader reader = new BoundedBlockingSubpartitionReader(
-					this, dataReader, numDataBuffersWritten);
+					this, data, numDataBuffersWritten, availability);
 			readers.add(reader);
 			return reader;
 		}
 	}
 
 	void releaseReaderReference(BoundedBlockingSubpartitionReader reader) throws IOException {
+		onConsumedSubpartition();
+
 		synchronized (lock) {
 			if (readers.remove(reader) && isReleased) {
 				checkReaderReferencesAndDispose();

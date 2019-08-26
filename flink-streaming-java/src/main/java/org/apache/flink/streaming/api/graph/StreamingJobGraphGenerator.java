@@ -47,6 +47,7 @@ import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.checkpoint.WithMasterCheckpointHook;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.operators.ChainingStrategy;
+import org.apache.flink.streaming.api.operators.InputSelectable;
 import org.apache.flink.streaming.api.operators.StreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.UdfStreamOperatorFactory;
 import org.apache.flink.streaming.api.transformations.ShuffleMode;
@@ -73,6 +74,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+
+import static org.apache.flink.runtime.jobgraph.tasks.CheckpointCoordinatorConfiguration.MINIMAL_CHECKPOINT_TIME;
 
 /**
  * The StreamingJobGraphGenerator converts a {@link StreamGraph} into a {@link JobGraph}.
@@ -138,6 +141,7 @@ public class StreamingJobGraphGenerator {
 	}
 
 	private JobGraph createJobGraph() {
+		preValidate();
 
 		// make sure that all vertices start immediately
 		jobGraph.setScheduleMode(streamGraph.getScheduleMode());
@@ -174,6 +178,35 @@ public class StreamingJobGraphGenerator {
 		}
 
 		return jobGraph;
+	}
+
+	@SuppressWarnings("deprecation")
+	private void preValidate() {
+		CheckpointConfig checkpointConfig = streamGraph.getCheckpointConfig();
+
+		if (checkpointConfig.isCheckpointingEnabled()) {
+			// temporarily forbid checkpointing for iterative jobs
+			if (streamGraph.isIterative() && !checkpointConfig.isForceCheckpointing()) {
+				throw new UnsupportedOperationException(
+					"Checkpointing is currently not supported by default for iterative jobs, as we cannot guarantee exactly once semantics. "
+						+ "State checkpoints happen normally, but records in-transit during the snapshot will be lost upon failure. "
+						+ "\nThe user can force enable state checkpoints with the reduced guarantees by calling: env.enableCheckpointing(interval,true)");
+			}
+
+			ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+			for (StreamNode node : streamGraph.getStreamNodes()) {
+				StreamOperatorFactory operatorFactory = node.getOperatorFactory();
+				if (operatorFactory != null) {
+					Class<?> operatorClass = operatorFactory.getStreamOperatorClass(classLoader);
+					if (InputSelectable.class.isAssignableFrom(operatorClass)) {
+
+						throw new UnsupportedOperationException(
+							"Checkpointing is currently not supported for operators that implement InputSelectable:"
+								+ operatorClass.getName());
+					}
+				}
+			}
+		}
 	}
 
 	private void setPhysicalEdges() {
@@ -514,6 +547,10 @@ public class StreamingJobGraphGenerator {
 			case BATCH:
 				resultPartitionType = ResultPartitionType.BLOCKING;
 				break;
+			case UNDEFINED:
+				resultPartitionType = streamGraph.isBlockingConnectionsBetweenChains() ?
+						ResultPartitionType.BLOCKING : ResultPartitionType.PIPELINED_BOUNDED;
+				break;
 			default:
 				throw new UnsupportedOperationException("Data exchange mode " +
 					edge.getShuffleMode() + " is not supported yet.");
@@ -605,7 +642,7 @@ public class StreamingJobGraphGenerator {
 		CheckpointConfig cfg = streamGraph.getCheckpointConfig();
 
 		long interval = cfg.getCheckpointInterval();
-		if (interval < 10) {
+		if (interval < MINIMAL_CHECKPOINT_TIME) {
 			// interval of max value means disable periodic checkpoint
 			interval = Long.MAX_VALUE;
 		}

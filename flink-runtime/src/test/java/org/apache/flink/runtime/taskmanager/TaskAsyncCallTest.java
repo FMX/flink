@@ -41,9 +41,7 @@ import org.apache.flink.runtime.executiongraph.TaskInformation;
 import org.apache.flink.runtime.filecache.FileCache;
 import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.network.NettyShuffleEnvironmentBuilder;
-import org.apache.flink.runtime.shuffle.ShuffleEnvironment;
 import org.apache.flink.runtime.io.network.TaskEventDispatcher;
-import org.apache.flink.runtime.taskexecutor.PartitionProducerStateChecker;
 import org.apache.flink.runtime.io.network.partition.NoOpResultPartitionConsumableNotifier;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionConsumableNotifier;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
@@ -53,8 +51,10 @@ import org.apache.flink.runtime.memory.MemoryManager;
 import org.apache.flink.runtime.metrics.groups.TaskMetricGroup;
 import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.query.KvStateRegistry;
+import org.apache.flink.runtime.shuffle.ShuffleEnvironment;
 import org.apache.flink.runtime.state.TestTaskStateManager;
 import org.apache.flink.runtime.taskexecutor.KvStateService;
+import org.apache.flink.runtime.taskexecutor.PartitionProducerStateChecker;
 import org.apache.flink.runtime.taskexecutor.TestGlobalAggregateManager;
 import org.apache.flink.runtime.util.TestingTaskManagerRuntimeInfo;
 import org.apache.flink.util.SerializedValue;
@@ -62,7 +62,6 @@ import org.apache.flink.util.TestLogger;
 
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -81,6 +80,9 @@ import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+/**
+ * Testing asynchronous call of {@link Task}.
+ */
 public class TaskAsyncCallTest extends TestLogger {
 
 	/** Number of expected checkpoints. */
@@ -130,15 +132,11 @@ public class TaskAsyncCallTest extends TestLogger {
 	}
 
 	// ------------------------------------------------------------------------
-	//  Tests 
+	//  Tests
 	// ------------------------------------------------------------------------
 
 	@Test
-	@Ignore
 	public void testCheckpointCallsInOrder() throws Exception {
-
-		// test ignored because with the changes introduced by [FLINK-11667],
-		// there is not guarantee about the order in which checkpoints are executed.
 
 		Task task = createTask(CheckpointsInOrderInvokable.class);
 		try (TaskCleaner ignored = new TaskCleaner(task)) {
@@ -160,11 +158,7 @@ public class TaskAsyncCallTest extends TestLogger {
 	}
 
 	@Test
-	@Ignore
 	public void testMixedAsyncCallsInOrder() throws Exception {
-
-		// test ignored because with the changes introduced by [FLINK-11667],
-		// there is not guarantee about the order in which checkpoints are executed.
 
 		Task task = createTask(CheckpointsInOrderInvokable.class);
 		try (TaskCleaner ignored = new TaskCleaner(task)) {
@@ -205,9 +199,9 @@ public class TaskAsyncCallTest extends TestLogger {
 			triggerLatch.await();
 
 			task.notifyCheckpointComplete(1);
-			task.cancelExecution();
-
 			notifyCheckpointCompleteLatch.await();
+
+			task.cancelExecution();
 			stopLatch.await();
 
 			assertThat(classLoaders, hasSize(greaterThanOrEqualTo(2)));
@@ -274,6 +268,9 @@ public class TaskAsyncCallTest extends TestLogger {
 			executor);
 	}
 
+	/**
+	 * Invokable for testing checkpoints.
+	 */
 	public static class CheckpointsInOrderInvokable extends AbstractInvokable {
 
 		private volatile long lastCheckpointId = 0;

@@ -20,6 +20,8 @@ package org.apache.flink.table.api.internal
 
 import org.apache.flink.annotation.VisibleForTesting
 import org.apache.flink.api.common.typeinfo.TypeInformation
+import org.apache.flink.sql.parser.ddl.{SqlCreateTable, SqlDropTable}
+import org.apache.flink.sql.parser.dml.RichSqlInsert
 import org.apache.flink.table.api._
 import org.apache.flink.table.calcite.{FlinkPlannerImpl, FlinkRelBuilder}
 import org.apache.flink.table.catalog._
@@ -27,21 +29,23 @@ import org.apache.flink.table.expressions._
 import org.apache.flink.table.expressions.resolver.lookups.TableReferenceLookup
 import org.apache.flink.table.factories.{TableFactoryService, TableFactoryUtil, TableSinkFactory}
 import org.apache.flink.table.functions.{AggregateFunction, ScalarFunction, TableFunction, UserDefinedAggregateFunction, _}
+import org.apache.flink.table.operations.ddl.CreateTableOperation
 import org.apache.flink.table.operations.utils.OperationTreeBuilder
 import org.apache.flink.table.operations.{CatalogQueryOperation, PlannerQueryOperation, TableSourceQueryOperation, _}
 import org.apache.flink.table.planner.PlanningConfigurationBuilder
-import org.apache.flink.table.sinks.{TableSink, TableSinkUtils}
+import org.apache.flink.table.sinks.{PartitionableTableSink, TableSink, TableSinkUtils}
 import org.apache.flink.table.sources.TableSource
+import org.apache.flink.table.sqlexec.SqlToOperationConverter
 import org.apache.flink.table.util.JavaScalaConversionUtil
-import org.apache.flink.util.StringUtils
 
 import org.apache.calcite.jdbc.CalciteSchemaBuilder.asRootSchema
 import org.apache.calcite.sql._
 import org.apache.calcite.sql.parser.SqlParser
 import org.apache.calcite.tools.FrameworkConfig
 
-import _root_.java.util.Optional
+import _root_.java.util.{Optional, HashMap => JHashMap, Map => JMap}
 
+import _root_.scala.collection.JavaConversions._
 import _root_.scala.collection.JavaConverters._
 
 /**
@@ -54,13 +58,11 @@ abstract class TableEnvImpl(
     private val catalogManager: CatalogManager)
   extends TableEnvironment {
 
-  protected val defaultCatalogName: String = catalogManager.getCurrentCatalog
-  protected val defaultDatabaseName: String = catalogManager.getCurrentDatabase
-
   // Table API/SQL function catalog
-  private[flink] val functionCatalog: FunctionCatalog = new FunctionCatalog(
-    defaultCatalogName,
-    defaultDatabaseName)
+  private[flink] val functionCatalog: FunctionCatalog = new FunctionCatalog(catalogManager)
+
+  // temporary utility until we don't use planner expressions anymore
+  functionCatalog.setPlannerTypeInferenceUtil(PlannerTypeInferenceUtilImpl.INSTANCE)
 
   // temporary bridge between API and planner
   private[flink] val expressionBridge: ExpressionBridge[PlannerExpression] =
@@ -78,32 +80,23 @@ abstract class TableEnvImpl(
   private[flink] val operationTreeBuilder = OperationTreeBuilder.create(
     functionCatalog,
     tableLookup,
-    !isBatch)
+    isStreamingMode)
 
   protected val planningConfigurationBuilder: PlanningConfigurationBuilder =
     new PlanningConfigurationBuilder(
       config,
       functionCatalog,
-      asRootSchema(new CatalogManagerCalciteSchema(catalogManager, isBatch)),
+      asRootSchema(new CatalogManagerCalciteSchema(catalogManager, isStreamingMode)),
       expressionBridge)
 
   def getConfig: TableConfig = config
 
-  private def isBatch: Boolean = this match {
-    case _: BatchTableEnvImpl => true
-    case _ => false
+  private def isStreamingMode: Boolean = this match {
+    case _: BatchTableEnvImpl => false
+    case _ => true
   }
 
-  override def registerExternalCatalog(name: String, externalCatalog: ExternalCatalog): Unit = {
-    catalogManager.registerExternalCatalog(name, externalCatalog)
-  }
-
-  override def getRegisteredExternalCatalog(name: String): ExternalCatalog = {
-    JavaScalaConversionUtil.toScala(catalogManager.getExternalCatalog(name)) match {
-      case Some(catalog) => catalog
-      case None => throw new CatalogNotExistException(name)
-    }
-  }
+  private def isBatchTable: Boolean = !isStreamingMode
 
   override def registerFunction(name: String, function: ScalarFunction): Unit = {
     functionCatalog.registerScalarFunction(
@@ -187,8 +180,8 @@ abstract class TableEnvImpl(
         "Only tables that belong to this TableEnvironment can be registered.")
     }
 
-    val tableTable = new QueryOperationCatalogView(table.getQueryOperation)
-    registerTableInternal(name, tableTable)
+    val view = new QueryOperationCatalogView(table.getQueryOperation)
+    catalogManager.createTable(view, getTemporaryObjectIdentifier(name), false)
   }
 
   override def registerTableSource(name: String, tableSource: TableSource[_]): Unit = {
@@ -230,7 +223,7 @@ abstract class TableEnvImpl(
   }
 
   override def fromTableSource(source: TableSource[_]): Table = {
-    createTable(new TableSourceQueryOperation(source, isBatch))
+    createTable(new TableSourceQueryOperation(source, isBatchTable))
   }
 
   /**
@@ -256,7 +249,9 @@ abstract class TableEnvImpl(
     tableSource: TableSource[_])
   : Unit = {
     // register
-    getCatalogTable(defaultCatalogName, defaultDatabaseName, name) match {
+    getCatalogTable(
+      catalogManager.getBuiltInCatalogName,
+      catalogManager.getBuiltInDatabaseName, name) match {
 
       // check if a table (source or sink) is registered
       case Some(table: ConnectorCatalogTable[_, _]) =>
@@ -266,15 +261,17 @@ abstract class TableEnvImpl(
             s"Please choose a different name.")
         } else {
           // wrapper contains only sink (not source)
-          replaceTableInternal(
-            name,
-            ConnectorCatalogTable
-              .sourceAndSink(tableSource, table.getTableSink.get, isBatch))
+          val sourceAndSink = ConnectorCatalogTable.sourceAndSink(
+            tableSource,
+            table.getTableSink.get,
+            isBatchTable)
+          catalogManager.alterTable(sourceAndSink, getTemporaryObjectIdentifier(name), false)
         }
 
       // no table is registered
       case _ =>
-        registerTableInternal(name, ConnectorCatalogTable.source(tableSource, isBatch))
+        val source = ConnectorCatalogTable.source(tableSource, isBatchTable)
+        catalogManager.createTable(source, getTemporaryObjectIdentifier(name), false)
     }
   }
 
@@ -283,7 +280,10 @@ abstract class TableEnvImpl(
     tableSink: TableSink[_])
   : Unit = {
     // check if a table (source or sink) is registered
-    getCatalogTable(defaultCatalogName, defaultDatabaseName, name) match {
+    getCatalogTable(
+      catalogManager.getBuiltInCatalogName,
+      catalogManager.getBuiltInDatabaseName,
+      name) match {
 
       // table source and/or sink is registered
       case Some(table: ConnectorCatalogTable[_, _]) =>
@@ -293,48 +293,26 @@ abstract class TableEnvImpl(
             s"Please choose a different name.")
         } else {
           // wrapper contains only source (not sink)
-          replaceTableInternal(
-            name,
-            ConnectorCatalogTable
-              .sourceAndSink(table.getTableSource.get, tableSink, isBatch))
+          val sourceAndSink = ConnectorCatalogTable.sourceAndSink(
+            table.getTableSource.get,
+            tableSink,
+            isBatchTable)
+          catalogManager.alterTable(sourceAndSink, getTemporaryObjectIdentifier(name), false)
         }
 
       // no table is registered
       case _ =>
-        registerTableInternal(name, ConnectorCatalogTable.sink(tableSink, isBatch))
+        val sink = ConnectorCatalogTable.sink(tableSink, isBatchTable)
+        catalogManager.createTable(sink, getTemporaryObjectIdentifier(name), false)
     }
   }
 
-  private def checkValidTableName(name: String): Unit = {
-    if (StringUtils.isNullOrWhitespaceOnly(name)) {
-      throw new ValidationException("A table name cannot be null or consist of only whitespaces.")
-    }
-  }
-
-  protected def registerTableInternal(name: String, table: CatalogBaseTable): Unit = {
-    checkValidTableName(name)
-    val path = new ObjectPath(defaultDatabaseName, name)
-    JavaScalaConversionUtil.toScala(catalogManager.getCatalog(defaultCatalogName)) match {
-      case Some(catalog) =>
-        catalog.createTable(
-          path,
-          table,
-          false)
-      case None => throw new TableException("The default catalog does not exist.")
-    }
-  }
-
-  protected def replaceTableInternal(name: String, table: CatalogBaseTable): Unit = {
-    checkValidTableName(name)
-    val path = new ObjectPath(defaultDatabaseName, name)
-    JavaScalaConversionUtil.toScala(catalogManager.getCatalog(defaultCatalogName)) match {
-      case Some(catalog) =>
-        catalog.alterTable(
-          path,
-          table,
-          false)
-      case None => throw new TableException("The default catalog does not exist.")
-    }
+  private def getTemporaryObjectIdentifier(name: String): ObjectIdentifier = {
+    catalogManager.qualifyIdentifier(
+      catalogManager.getBuiltInCatalogName,
+      catalogManager.getBuiltInDatabaseName,
+      name
+    )
   }
 
   @throws[TableException]
@@ -346,8 +324,9 @@ abstract class TableEnvImpl(
   }
 
   private[flink] def scanInternal(tablePath: Array[String]): Option[CatalogQueryOperation] = {
-    JavaScalaConversionUtil.toScala(catalogManager.resolveTable(tablePath: _*))
-      .map(t => new CatalogQueryOperation(t.getTablePath, t.getTableSchema))
+    val objectIdentifier = catalogManager.qualifyIdentifier(tablePath: _*)
+    JavaScalaConversionUtil.toScala(catalogManager.getTable(objectIdentifier))
+      .map(t => new CatalogQueryOperation(objectIdentifier, t.getSchema))
   }
 
   override def listCatalogs(): Array[String] = {
@@ -372,6 +351,8 @@ abstract class TableEnvImpl(
   }
 
   override def listUserDefinedFunctions(): Array[String] = functionCatalog.getUserDefinedFunctions
+
+  override def listFunctions(): Array[String] = functionCatalog.getFunctions
 
   override def explain(table: Table): String
 
@@ -402,10 +383,12 @@ abstract class TableEnvImpl(
     // parse the sql query
     val parsed = planner.parse(stmt)
     parsed match {
-      case insert: SqlInsert =>
-        // validate the SQL query
-        val query = insert.getSource
-        val validatedQuery = planner.validate(query)
+      case insert: RichSqlInsert =>
+        // validate the insert
+        val validatedInsert = planner.validate(insert).asInstanceOf[RichSqlInsert]
+        // we do not validate the row type for sql insert now, so validate the source
+        // separately.
+        val validatedQuery = planner.validate(validatedInsert.getSource)
 
         val tableOperation = new PlannerQueryOperation(planner.rel(validatedQuery).rel)
         // get query result as Table
@@ -415,10 +398,24 @@ abstract class TableEnvImpl(
         val targetTablePath = insert.getTargetTable.asInstanceOf[SqlIdentifier].names
 
         // insert query result into sink table
-        insertInto(queryResult, targetTablePath.asScala:_*)
+        insertInto(queryResult, InsertOptions(insert.getStaticPartitionKVs),
+          targetTablePath.asScala:_*)
+      case createTable: SqlCreateTable =>
+        val operation = SqlToOperationConverter
+          .convert(planner, createTable)
+          .asInstanceOf[CreateTableOperation]
+        val objectIdentifier = catalogManager.qualifyIdentifier(operation.getTablePath: _*)
+        catalogManager.createTable(
+          operation.getCatalogTable,
+          objectIdentifier,
+          operation.isIgnoreIfExists)
+      case dropTable: SqlDropTable =>
+        val objectIdentifier = catalogManager.qualifyIdentifier(dropTable.fullTableName(): _*)
+        catalogManager.dropTable(objectIdentifier, dropTable.getIfExists)
       case _ =>
         throw new TableException(
-          "Unsupported SQL query! sqlUpdate() only accepts SQL statements of type INSERT.")
+          "Unsupported SQL query! sqlUpdate() only accepts SQL statements of " +
+            "type INSERT, CREATE TABLE, DROP TABLE.")
     }
   }
 
@@ -440,11 +437,17 @@ abstract class TableEnvImpl(
   private[flink] def writeToSink[T](table: Table, sink: TableSink[T]): Unit
 
   override def insertInto(
-    table: Table,
-    path: String,
-    pathContinued: String*): Unit = {
-    insertInto(table, path +: pathContinued: _*)
+      table: Table,
+      path: String,
+      pathContinued: String*): Unit = {
+    insertInto(
+      table,
+      InsertOptions(new JHashMap[String, String]()),
+      path +: pathContinued: _*)
   }
+
+  /** Insert options for executing sql insert. **/
+  case class InsertOptions(staticPartitions: JMap[String, String])
 
   /**
     * Writes the [[Table]] to a [[TableSink]] that was registered under the specified name.
@@ -452,45 +455,58 @@ abstract class TableEnvImpl(
     * @param table The table to write to the TableSink.
     * @param sinkTablePath The name of the registered TableSink.
     */
-  private def insertInto(table: Table, sinkTablePath: String*): Unit = {
+  private def insertInto(table: Table,
+      insertOptions: InsertOptions,
+      sinkTablePath: String*): Unit = {
 
-    // check that sink table exists
-    if (null == sinkTablePath) {
-      throw new TableException("Name of TableSink must not be null.")
-    }
-    if (sinkTablePath.isEmpty) {
-      throw new TableException("Name of TableSink must not be empty.")
-    }
+    val objectIdentifier = catalogManager.qualifyIdentifier(sinkTablePath: _*)
 
-    getTableSink(sinkTablePath: _*) match {
+    getTableSink(objectIdentifier) match {
 
       case None =>
         throw new TableException(s"No table was registered under the name $sinkTablePath.")
 
       case Some(tableSink) =>
         // validate schema of source table and table sink
-        TableSinkUtils.validateSink(table.getQueryOperation, sinkTablePath.asJava, tableSink)
+        TableSinkUtils.validateSink(
+          insertOptions.staticPartitions,
+          table.getQueryOperation,
+          objectIdentifier,
+          tableSink)
+        // set static partitions if it is a partitioned table sink
+        tableSink match {
+          case partitionableSink: PartitionableTableSink
+            if partitionableSink.getPartitionFieldNames != null
+              && partitionableSink.getPartitionFieldNames.nonEmpty =>
+            partitionableSink.setStaticPartition(insertOptions.staticPartitions)
+          case _ =>
+        }
         // emit the table to the configured table sink
         writeToSink(table, tableSink)
     }
   }
 
-  private def getTableSink(name: String*): Option[TableSink[_]] = {
-    JavaScalaConversionUtil.toScala(catalogManager.resolveTable(name: _*)) match {
-      case Some(s) if s.getExternalCatalogTable.isPresent =>
-
-        Option(TableFactoryUtil.findAndCreateTableSink(s.getExternalCatalogTable.get()))
-
-      case Some(s) if JavaScalaConversionUtil.toScala(s.getCatalogTable)
-        .exists(_.isInstanceOf[ConnectorCatalogTable[_, _]]) =>
+  private def getTableSink(objectIdentifier: ObjectIdentifier): Option[TableSink[_]] = {
+    JavaScalaConversionUtil.toScala(catalogManager.getTable(objectIdentifier)) match {
+      case Some(s) if s.isInstanceOf[ConnectorCatalogTable[_, _]] =>
 
         JavaScalaConversionUtil
-          .toScala(s.getCatalogTable.get().asInstanceOf[ConnectorCatalogTable[_, _]].getTableSink)
+          .toScala(s.asInstanceOf[ConnectorCatalogTable[_, _]].getTableSink)
 
-      case Some(s) if JavaScalaConversionUtil.toScala(s.getCatalogTable)
-        .exists(_.isInstanceOf[CatalogTable]) =>
+      case Some(s) if s.isInstanceOf[CatalogTable] =>
 
-        val sinkProperties = s.getCatalogTable.get().asInstanceOf[CatalogTable].toProperties
+        val catalog = catalogManager.getCatalog(objectIdentifier.getCatalogName)
+        val catalogTable = s.asInstanceOf[CatalogTable]
+        if (catalog.isPresent && catalog.get().getTableFactory.isPresent) {
+          val sink = TableFactoryUtil.createTableSinkForCatalogTable(
+            catalog.get(),
+            catalogTable,
+            objectIdentifier.toObjectPath)
+          if (sink.isPresent) {
+            return Option(sink.get())
+          }
+        }
+        val sinkProperties = catalogTable.toProperties
         Option(TableFactoryService.find(classOf[TableSinkFactory[_]], sinkProperties)
           .createTableSink(sinkProperties))
 
@@ -499,8 +515,8 @@ abstract class TableEnvImpl(
   }
 
   protected def getCatalogTable(name: String*): Option[CatalogBaseTable] = {
-    JavaScalaConversionUtil.toScala(catalogManager.resolveTable(name: _*))
-      .flatMap(t => JavaScalaConversionUtil.toScala(t.getCatalogTable))
+    val objectIdentifier = catalogManager.qualifyIdentifier(name: _*)
+    JavaScalaConversionUtil.toScala(catalogManager.getTable(objectIdentifier))
   }
 
   /** Returns the [[FlinkRelBuilder]] of this TableEnvironment. */

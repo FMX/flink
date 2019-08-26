@@ -37,23 +37,23 @@ Calc(select=[EXPR$0])
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : Calc(select: (a))
+			content : Calc(select=[a])
 			ship_strategy : FORWARD
 
 			 : Operator
-				content : LocalHashAggregate(groupBy:(a),select:(a, Partial_COUNT(*) AS count1$0),)
+				content : LocalHashAggregate(groupBy=[a], select=[a, Partial_COUNT(*) AS count1$0])
 				ship_strategy : FORWARD
 
 				 : Operator
-					content : GlobalHashAggregate(groupBy:(a),select:(a, Final_COUNT(count1$0) AS EXPR$0),)
+					content : HashAggregate(isMerge=[true], groupBy=[a], select=[a, Final_COUNT(count1$0) AS EXPR$0])
 					ship_strategy : HASH[a]
 
 					 : Operator
-						content : Calc(select: (EXPR$0))
+						content : Calc(select=[EXPR$0])
 						ship_strategy : FORWARD
 
 ]]>
@@ -80,23 +80,23 @@ Calc(select=[EXPR$0]): rowcount = , cumulative cost = {rows, cpu, io, network, m
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : Calc(select: (a))
+			content : Calc(select=[a])
 			ship_strategy : FORWARD
 
 			 : Operator
-				content : LocalHashAggregate(groupBy:(a),select:(a, Partial_COUNT(*) AS count1$0),)
+				content : LocalHashAggregate(groupBy=[a], select=[a, Partial_COUNT(*) AS count1$0])
 				ship_strategy : FORWARD
 
 				 : Operator
-					content : GlobalHashAggregate(groupBy:(a),select:(a, Final_COUNT(count1$0) AS EXPR$0),)
+					content : HashAggregate(isMerge=[true], groupBy=[a], select=[a, Final_COUNT(count1$0) AS EXPR$0])
 					ship_strategy : HASH[a]
 
 					 : Operator
-						content : Calc(select: (EXPR$0))
+						content : Calc(select=[EXPR$0])
 						ship_strategy : FORWARD
 
 ]]>
@@ -116,7 +116,7 @@ BoundedStreamScan(table=[[default_catalog, default_database, MyTable1]], fields=
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 ]]>
@@ -136,7 +136,7 @@ BoundedStreamScan(table=[[default_catalog, default_database, MyTable1]], fields=
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 ]]>
@@ -158,11 +158,11 @@ Calc(select=[a, b, c], where=[=(MOD(a, 2), 0)])
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : Calc(where: ((a MOD 2) = 0), select: (a, b, c))
+			content : Calc(select=[a, b, c], where=[((a MOD 2) = 0)])
 			ship_strategy : FORWARD
 
 ]]>
@@ -184,11 +184,11 @@ Calc(select=[a, b, c], where=[=(MOD(a, 2), 0)]): rowcount = , cumulative cost = 
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : Calc(where: ((a MOD 2) = 0), select: (a, b, c))
+			content : Calc(select=[a, b, c], where=[((a MOD 2) = 0)])
 			ship_strategy : FORWARD
 
 ]]>
@@ -219,19 +219,19 @@ Calc(select=[a, b, c, e, f])
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable2), fields:(d, e, f))
+			content : SourceConversion(table=[default_catalog.default_database.MyTable2], fields=[d, e, f])
 			ship_strategy : FORWARD
 
 			 : Operator
-				content : SortMergeJoin(where: (a = d))
+				content : SortMergeJoin(joinType=[InnerJoin], where=[(a = d)], select=[a, b, c, d, e, f])
 				ship_strategy : HASH[a]
 
 				 : Operator
-					content : Calc(select: (a, b, c, e, f))
+					content : Calc(select=[a, b, c, e, f])
 					ship_strategy : FORWARD
 
 ]]>
@@ -262,19 +262,19 @@ Calc(select=[a, b, c, e, f]): rowcount = , cumulative cost = {rows, cpu, io, net
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable2), fields:(d, e, f))
+			content : SourceConversion(table=[default_catalog.default_database.MyTable2], fields=[d, e, f])
 			ship_strategy : FORWARD
 
 			 : Operator
-				content : SortMergeJoin(where: (a = d))
+				content : SortMergeJoin(joinType=[InnerJoin], where=[(a = d)], select=[a, b, c, d, e, f])
 				ship_strategy : HASH[a]
 
 				 : Operator
-					content : Calc(select: (a, b, c, e, f))
+					content : Calc(select=[a, b, c, e, f])
 					ship_strategy : FORWARD
 
 ]]>
@@ -290,7 +290,7 @@ LogicalSink(name=[sink1], fields=[a, cnt])
          +- LogicalProject(a=[$0])
             +- LogicalTableScan(table=[[default_catalog, default_database, MyTable1]])
 
-LogicalSink(name=[sink1], fields=[a, cnt])
+LogicalSink(name=[sink2], fields=[a, cnt])
 +- LogicalProject(a=[$0], cnt=[$1])
    +- LogicalFilter(condition=[<($1, 10)])
       +- LogicalAggregate(group=[{0}], cnt=[COUNT()])
@@ -308,7 +308,7 @@ Sink(name=[sink1], fields=[a, cnt])
 +- Calc(select=[a, cnt], where=[>(cnt, 10)])
    +- Reused(reference_id=[1])
 
-Sink(name=[sink1], fields=[a, cnt])
+Sink(name=[sink2], fields=[a, cnt])
 +- Calc(select=[a, cnt], where=[<(cnt, 10)])
    +- Reused(reference_id=[1])
 
@@ -317,23 +317,23 @@ Sink(name=[sink1], fields=[a, cnt])
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : Calc(select: (a))
+			content : Calc(select=[a])
 			ship_strategy : FORWARD
 
 			 : Operator
-				content : LocalHashAggregate(groupBy:(a),select:(a, Partial_COUNT(*) AS count1$0),)
+				content : LocalHashAggregate(groupBy=[a], select=[a, Partial_COUNT(*) AS count1$0])
 				ship_strategy : FORWARD
 
 				 : Operator
-					content : GlobalHashAggregate(groupBy:(a),select:(a, Final_COUNT(count1$0) AS cnt),)
+					content : HashAggregate(isMerge=[true], groupBy=[a], select=[a, Final_COUNT(count1$0) AS cnt])
 					ship_strategy : HASH[a]
 
 					 : Operator
-						content : Calc(where: (cnt > 10), select: (a, cnt))
+						content : Calc(select=[a, cnt], where=[(cnt > 10)])
 						ship_strategy : FORWARD
 
 						 : Operator
@@ -341,7 +341,7 @@ Sink(name=[sink1], fields=[a, cnt])
 							ship_strategy : FORWARD
 
 							 : Operator
-								content : Calc(where: (cnt < 10), select: (a, cnt))
+								content : Calc(select=[a, cnt], where=[(cnt < 10)])
 								ship_strategy : FORWARD
 
 								 : Operator
@@ -350,11 +350,11 @@ Sink(name=[sink1], fields=[a, cnt])
 
 									 : Data Sink
 										content : Sink: collect
-										ship_strategy : FORWARD
+										ship_strategy : REBALANCE
 
 										 : Data Sink
 											content : Sink: collect
-											ship_strategy : FORWARD
+											ship_strategy : REBALANCE
 
 ]]>
     </Resource>
@@ -369,7 +369,7 @@ LogicalSink(name=[sink1], fields=[a, cnt])
          +- LogicalProject(a=[$0])
             +- LogicalTableScan(table=[[default_catalog, default_database, MyTable1]])
 
-LogicalSink(name=[sink1], fields=[a, cnt])
+LogicalSink(name=[sink2], fields=[a, cnt])
 +- LogicalProject(a=[$0], cnt=[$1])
    +- LogicalFilter(condition=[<($1, 10)])
       +- LogicalAggregate(group=[{0}], cnt=[COUNT()])
@@ -387,7 +387,7 @@ Sink(name=[sink1], fields=[a, cnt]): rowcount = , cumulative cost = {rows, cpu, 
 +- Calc(select=[a, cnt], where=[>(cnt, 10)]): rowcount = , cumulative cost = {rows, cpu, io, network, memory}
    +- Reused(reference_id=[1])
 
-Sink(name=[sink1], fields=[a, cnt]): rowcount = , cumulative cost = {rows, cpu, io, network, memory}
+Sink(name=[sink2], fields=[a, cnt]): rowcount = , cumulative cost = {rows, cpu, io, network, memory}
 +- Calc(select=[a, cnt], where=[<(cnt, 10)]): rowcount = , cumulative cost = {rows, cpu, io, network, memory}
    +- Reused(reference_id=[1])
 
@@ -396,23 +396,23 @@ Sink(name=[sink1], fields=[a, cnt]): rowcount = , cumulative cost = {rows, cpu, 
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : Calc(select: (a))
+			content : Calc(select=[a])
 			ship_strategy : FORWARD
 
 			 : Operator
-				content : LocalHashAggregate(groupBy:(a),select:(a, Partial_COUNT(*) AS count1$0),)
+				content : LocalHashAggregate(groupBy=[a], select=[a, Partial_COUNT(*) AS count1$0])
 				ship_strategy : FORWARD
 
 				 : Operator
-					content : GlobalHashAggregate(groupBy:(a),select:(a, Final_COUNT(count1$0) AS cnt),)
+					content : HashAggregate(isMerge=[true], groupBy=[a], select=[a, Final_COUNT(count1$0) AS cnt])
 					ship_strategy : HASH[a]
 
 					 : Operator
-						content : Calc(where: (cnt > 10), select: (a, cnt))
+						content : Calc(select=[a, cnt], where=[(cnt > 10)])
 						ship_strategy : FORWARD
 
 						 : Operator
@@ -420,7 +420,7 @@ Sink(name=[sink1], fields=[a, cnt]): rowcount = , cumulative cost = {rows, cpu, 
 							ship_strategy : FORWARD
 
 							 : Operator
-								content : Calc(where: (cnt < 10), select: (a, cnt))
+								content : Calc(select=[a, cnt], where=[(cnt < 10)])
 								ship_strategy : FORWARD
 
 								 : Operator
@@ -429,11 +429,11 @@ Sink(name=[sink1], fields=[a, cnt]): rowcount = , cumulative cost = {rows, cpu, 
 
 									 : Data Sink
 										content : Sink: collect
-										ship_strategy : FORWARD
+										ship_strategy : REBALANCE
 
 										 : Data Sink
 											content : Sink: collect
-											ship_strategy : FORWARD
+											ship_strategy : REBALANCE
 
 ]]>
     </Resource>
@@ -441,13 +441,13 @@ Sink(name=[sink1], fields=[a, cnt]): rowcount = , cumulative cost = {rows, cpu, 
   <TestCase name="testExplainWithSingleSink[extended=false]">
     <Resource name="explain">
       <![CDATA[== Abstract Syntax Tree ==
-LogicalSink(fields=[a, b, c])
+LogicalSink(name=[sink], fields=[a, b, c])
 +- LogicalProject(a=[$0], b=[$1], c=[$2])
    +- LogicalFilter(condition=[>($0, 10)])
       +- LogicalTableScan(table=[[default_catalog, default_database, MyTable1]])
 
 == Optimized Logical Plan ==
-Sink(fields=[a, b, c])
+Sink(name=[sink], fields=[a, b, c])
 +- Calc(select=[a, b, c], where=[>(a, 10)])
    +- BoundedStreamScan(table=[[default_catalog, default_database, MyTable1]], fields=[a, b, c])
 
@@ -456,11 +456,11 @@ Sink(fields=[a, b, c])
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : Calc(where: (a > 10), select: (a, b, c))
+			content : Calc(select=[a, b, c], where=[(a > 10)])
 			ship_strategy : FORWARD
 
 			 : Operator
@@ -477,13 +477,13 @@ Sink(fields=[a, b, c])
   <TestCase name="testExplainWithSingleSink[extended=true]">
     <Resource name="explain">
       <![CDATA[== Abstract Syntax Tree ==
-LogicalSink(fields=[a, b, c])
+LogicalSink(name=[sink], fields=[a, b, c])
 +- LogicalProject(a=[$0], b=[$1], c=[$2])
    +- LogicalFilter(condition=[>($0, 10)])
       +- LogicalTableScan(table=[[default_catalog, default_database, MyTable1]])
 
 == Optimized Logical Plan ==
-Sink(fields=[a, b, c]): rowcount = , cumulative cost = {rows, cpu, io, network, memory}
+Sink(name=[sink], fields=[a, b, c]): rowcount = , cumulative cost = {rows, cpu, io, network, memory}
 +- Calc(select=[a, b, c], where=[>(a, 10)]): rowcount = , cumulative cost = {rows, cpu, io, network, memory}
    +- BoundedStreamScan(table=[[default_catalog, default_database, MyTable1]], fields=[a, b, c]): rowcount = , cumulative cost = {rows, cpu, io, network, memory}
 
@@ -492,11 +492,11 @@ Sink(fields=[a, b, c]): rowcount = , cumulative cost = {rows, cpu, io, network, 
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : Calc(where: (a > 10), select: (a, b, c))
+			content : Calc(select=[a, b, c], where=[(a > 10)])
 			ship_strategy : FORWARD
 
 			 : Operator
@@ -528,15 +528,15 @@ SortLimit(orderBy=[a ASC], offset=[0], fetch=[5], global=[true])
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : LocalSortLimit(orderBy: [a ASC], offset: 0, fetch: 5)
+			content : SortLimit(orderBy=[a ASC], offset=[0], fetch=[5], global=[false])
 			ship_strategy : FORWARD
 
 			 : Operator
-				content : GlobalSortLimit(orderBy: [a ASC], offset: 0, fetch: 5)
+				content : SortLimit(orderBy=[a ASC], offset=[0], fetch=[5], global=[true])
 				ship_strategy : GLOBAL
 
 ]]>
@@ -560,15 +560,15 @@ SortLimit(orderBy=[a ASC], offset=[0], fetch=[5], global=[true]): rowcount = , c
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : LocalSortLimit(orderBy: [a ASC], offset: 0, fetch: 5)
+			content : SortLimit(orderBy=[a ASC], offset=[0], fetch=[5], global=[false])
 			ship_strategy : FORWARD
 
 			 : Operator
-				content : GlobalSortLimit(orderBy: [a ASC], offset: 0, fetch: 5)
+				content : SortLimit(orderBy=[a ASC], offset=[0], fetch=[5], global=[true])
 				ship_strategy : GLOBAL
 
 ]]>
@@ -587,6 +587,10 @@ TableSourceScan(table=[[default_catalog, default_database, MyTable, source: [Tes
  : Data Source
 	content : collect elements with CollectionInputFormat
 
+	 : Operator
+		content : SourceConversion(table=[default_catalog.default_database.MyTable, source: [TestTableSource(a, b, c)]], fields=[a, b, c])
+		ship_strategy : FORWARD
+
 ]]>
     </Resource>
   </TestCase>
@@ -602,6 +606,10 @@ TableSourceScan(table=[[default_catalog, default_database, MyTable, source: [Tes
 == Physical Execution Plan ==
  : Data Source
 	content : collect elements with CollectionInputFormat
+
+	 : Operator
+		content : SourceConversion(table=[default_catalog.default_database.MyTable, source: [TestTableSource(a, b, c)]], fields=[a, b, c])
+		ship_strategy : FORWARD
 
 ]]>
     </Resource>
@@ -628,11 +636,11 @@ Union(all=[true], union=[a, b, c]): rowcount = , cumulative cost = {rows, cpu, i
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable2), fields:(d, e, f))
+			content : SourceConversion(table=[default_catalog.default_database.MyTable2], fields=[d, e, f])
 			ship_strategy : FORWARD
 
 ]]>
@@ -660,11 +668,11 @@ Union(all=[true], union=[a, b, c])
 	content : collect elements with CollectionInputFormat
 
 	 : Operator
-		content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable1), fields:(a, b, c))
+		content : SourceConversion(table=[default_catalog.default_database.MyTable1], fields=[a, b, c])
 		ship_strategy : FORWARD
 
 		 : Operator
-			content : SourceConversion(table:Buffer(default_catalog, default_database, MyTable2), fields:(d, e, f))
+			content : SourceConversion(table=[default_catalog.default_database.MyTable2], fields=[d, e, f])
 			ship_strategy : FORWARD
 
 ]]>

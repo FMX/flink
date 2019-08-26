@@ -22,6 +22,9 @@ import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.MemorySize;
+import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.runtime.blob.TransientBlobKey;
 import org.apache.flink.runtime.clusterframework.ApplicationStatus;
 import org.apache.flink.runtime.clusterframework.types.AllocationID;
@@ -55,7 +58,6 @@ import org.apache.flink.runtime.resourcemanager.registration.JobManagerRegistrat
 import org.apache.flink.runtime.resourcemanager.registration.WorkerRegistration;
 import org.apache.flink.runtime.resourcemanager.slotmanager.ResourceActions;
 import org.apache.flink.runtime.resourcemanager.slotmanager.SlotManager;
-import org.apache.flink.runtime.resourcemanager.slotmanager.SlotManagerException;
 import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerInfo;
 import org.apache.flink.runtime.rpc.FatalErrorHandler;
 import org.apache.flink.runtime.rpc.FencedRpcEndpoint;
@@ -64,6 +66,7 @@ import org.apache.flink.runtime.taskexecutor.FileType;
 import org.apache.flink.runtime.taskexecutor.SlotReport;
 import org.apache.flink.runtime.taskexecutor.TaskExecutorGateway;
 import org.apache.flink.runtime.taskexecutor.TaskExecutorRegistrationSuccess;
+import org.apache.flink.runtime.taskexecutor.TaskManagerServices;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkException;
 
@@ -438,7 +441,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 
 				try {
 					slotManager.registerSlotRequest(slotRequest);
-				} catch (SlotManagerException e) {
+				} catch (ResourceManagerException e) {
 					return FutureUtils.completedExceptionally(e);
 				}
 
@@ -922,14 +925,18 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 
 			setFencingToken(newResourceManagerId);
 
-			startHeartbeatServices();
-
-			slotManager.start(getFencingToken(), getMainThreadExecutor(), new ResourceActionsImpl());
+			startServicesOnLeadership();
 
 			return prepareLeadershipAsync().thenApply(ignored -> true);
 		} else {
 			return CompletableFuture.completedFuture(false);
 		}
+	}
+
+	protected void startServicesOnLeadership() {
+		startHeartbeatServices();
+
+		slotManager.start(getFencingToken(), getMainThreadExecutor(), new ResourceActionsImpl());
 	}
 
 	/**
@@ -948,6 +955,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 				slotManager.suspend();
 
 				stopHeartbeatServices();
+
 			});
 	}
 
@@ -1057,6 +1065,14 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 	 * @return True if the worker was stopped, otherwise false
 	 */
 	public abstract boolean stopWorker(WorkerType worker);
+
+	/**
+	 * Set {@link SlotManager} whether to fail unfulfillable slot requests.
+	 * @param failUnfulfillableRequest whether to fail unfulfillable requests
+	 */
+	protected void setFailUnfulfillableRequest(boolean failUnfulfillableRequest) {
+		slotManager.setFailUnfulfillableRequest(failUnfulfillableRequest);
+	}
 
 	// ------------------------------------------------------------------------
 	//  Static utility classes
@@ -1191,8 +1207,12 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 	//  Helper methods
 	// ------------------------------------------------------------------------
 
-	protected static Collection<ResourceProfile> createSlotsPerWorker(int numSlots) {
-		return Collections.nCopies(numSlots, ResourceProfile.ANY);
+	public static Collection<ResourceProfile> createWorkerSlotProfiles(Configuration config) {
+		final int numSlots = config.getInteger(TaskManagerOptions.NUM_TASK_SLOTS);
+		final long managedMemoryBytes = MemorySize.parse(config.getString(TaskManagerOptions.MANAGED_MEMORY_SIZE)).getBytes();
+
+		final ResourceProfile resourceProfile = TaskManagerServices.computeSlotResourceProfile(numSlots, managedMemoryBytes);
+		return Collections.nCopies(numSlots, resourceProfile);
 	}
 }
 
